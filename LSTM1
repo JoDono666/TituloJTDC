@@ -1,0 +1,111 @@
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, Bidirectional
+from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+# Cargar datos
+file_path = "C:/Users/josen/OneDrive/Desktop/Tesis/data2022-2024ej.xlsx"
+df = pd.read_excel(file_path, sheet_name='Hoja1')
+
+columna_objetivo = "Ocup"
+variables_exogenas = ["IPC General", "Costo_KM", "Feriados"]
+
+data = df[[columna_objetivo] + variables_exogenas].dropna()
+
+# Normalización con MinMaxScaler
+scaler = MinMaxScaler()
+data_scaled = scaler.fit_transform(data)
+
+
+def crear_secuencias(data, ventana):
+    X, y = [], []
+    for i in range(len(data) - ventana):
+        X.append(data[i:i+ventana])
+        y.append(data[i+ventana, 0])  # Primera columna es la variable objetivo
+    return np.array(X), np.array(y)
+
+ventana = 90  # Aumentamos la ventana de tiempo
+X, y = crear_secuencias(data_scaled, ventana)
+
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=False)
+
+
+model = Sequential([
+    Bidirectional(LSTM(128, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2]))),
+    BatchNormalization(),
+    Dropout(0.1),
+
+    Bidirectional(LSTM(64, return_sequences=True)),
+    BatchNormalization(),
+    Dropout(0.1),
+
+    Bidirectional(LSTM(32, return_sequences=True)),
+    BatchNormalization(),
+    Dropout(0.1),
+
+    Bidirectional(LSTM(16, return_sequences=False)),  # LSTM final sin return_sequences
+    BatchNormalization(),
+    Dropout(0.1),
+
+    Dense(32, activation='relu'),  # Cambiamos a ReLU para capturar mejor variaciones grandes
+    Dense(1)
+])
+
+
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0003), loss='mse')
+
+callbacks = [
+    ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=15, verbose=1),
+    EarlyStopping(monitor='val_loss', patience=50, restore_best_weights=True, verbose=1)
+]
+
+
+history = model.fit(X_train, y_train, epochs=500, batch_size=64, validation_data=(X_test, y_test), verbose=1, callbacks=callbacks)
+
+
+y_pred = model.predict(X_test)
+
+# Inversa de la normalización solo para la variable objetivo
+y_pred_inv = scaler.inverse_transform(np.hstack((y_pred.reshape(-1,1), np.zeros((y_pred.shape[0], len(variables_exogenas))))))[:,0]
+y_test_inv = scaler.inverse_transform(np.hstack((y_test.reshape(-1,1), np.zeros((y_test.shape[0], len(variables_exogenas))))))[:,0]
+
+rmse = np.sqrt(mean_squared_error(y_test_inv, y_pred_inv))
+mae = mean_absolute_error(y_test_inv, y_pred_inv)
+r2 = r2_score(y_test_inv, y_pred_inv)
+
+
+print("\n **Evaluación del Modelo LSTM Mejorado**")
+print(f" RMSE: {rmse:.4f}")
+print(f" MAE: {mae:.4f}")
+print(f" R² Score: {r2:.4f}")
+
+
+sns.set_style("whitegrid")
+
+
+plt.figure(figsize=(12,6))
+plt.plot(y_test_inv, label="Real", linestyle='dashed', color="red", alpha=0.8)
+plt.plot(y_pred_inv, label="Predicción", color="blue", alpha=0.8)
+plt.legend()
+plt.title("Predicción vs Real - Modelo LSTM")
+plt.xlabel("Tiempo")
+plt.ylabel("Ocupación")
+plt.show()
+
+
+plt.figure(figsize=(8,5))
+plt.plot(history.history['loss'], label='Train Loss', color='blue')
+plt.plot(history.history['val_loss'], label='Validation Loss', color='orange')
+plt.legend()
+plt.title("Pérdida durante el Entrenamiento")
+plt.xlabel("Épocas")
+plt.ylabel("MSE")
+plt.show()
