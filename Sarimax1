@@ -1,0 +1,74 @@
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Cargar datos
+file_path = "C:/Users/josen/OneDrive/Desktop/Tesis/data2022-2024ej.xlsx"
+df = pd.read_excel(file_path, sheet_name='Hoja1')
+
+
+df['FechaPartida'] = pd.to_datetime(df['FechaPartida'])
+df = df.set_index('FechaPartida').sort_index()
+
+# Definir variable objetivo y exógenas
+target_variable = 'Ocup'
+exog_variables = ['IPC General', 'Costo_KM', 'Feriados']
+
+# Dividir en entrenamiento y prueba (80% - 20%)
+train_size = int(len(df) * 0.8)
+train, test = df.iloc[:train_size], df.iloc[train_size:]
+
+# Ajustar modelo SARIMAX
+sarimax_model = sm.tsa.statespace.SARIMAX(
+    train[target_variable],
+    exog=train[exog_variables],
+    order=(1, 0, 1),  # Sin diferenciación para evitar distorsión
+    seasonal_order=(1, 0, 1, 12),  # Ajuste de estacionalidad sin diferenciación
+    enforce_stationarity=True,
+    enforce_invertibility=True
+)
+
+sarimax_results = sarimax_model.fit(disp=False)
+
+# Generar predicciones
+predictions = sarimax_results.predict(start=len(train), end=len(df)-1, exog=test[exog_variables])
+
+# Asegurar que las predicciones estén dentro del rango válido (0 a 1.17)
+predictions = np.clip(predictions, df['Ocup'].min(), df['Ocup'].max())
+
+# Evaluar el modelo
+mse = mean_squared_error(test[target_variable], predictions)
+rmse = np.sqrt(mse)
+r2 = r2_score(test[target_variable], predictions)
+
+print(f'RMSE: {rmse}')
+print(f'R²: {r2}')
+print(f'MSE: {mse}')
+
+# Mejorar el formato de la gráfica con los colores corregidos y la serie completa
+plt.figure(figsize=(12, 6))
+
+# Datos de entrenamiento en color naranja
+plt.plot(df.index[:train_size], train[target_variable], label='Entrenamiento', color='darkorange')
+
+# Datos reales en color rojo
+plt.plot(df.index[train_size:], test[target_variable], label='Real (Pasajeros)', color='red')
+
+# Predicciones en color verde con línea punteada
+plt.plot(df.index[train_size:], predictions, label='Predicción SARIMAX', color='limegreen', linestyle='dashed')
+
+# Ajustar títulos y etiquetas
+plt.xlabel('Fecha')
+plt.ylabel('Ocupación')
+plt.title('Modelo SARIMAX - Predicción vs. Datos Reales')
+
+# Agregar leyenda y mejorar visualización
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.6)
+
+# Mostrar la gráfica con toda la serie de tiempo visible
+plt.xlim(df.index.min(), df.index.max())
+
+plt.show()
