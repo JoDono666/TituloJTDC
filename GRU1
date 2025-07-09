@@ -1,0 +1,124 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import GRU, Dense, Dropout, Bidirectional, BatchNormalization
+from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+
+file_path = "C:/Users/josen/OneDrive/Desktop/Tesis/data2022-2024ej.xlsx"
+df = pd.read_excel(file_path, sheet_name='Hoja1')
+
+
+df["FechaPartida"] = pd.to_datetime(df["FechaPartida"])
+df["Año"] = df["FechaPartida"].dt.year
+df["Mes"] = df["FechaPartida"].dt.month
+
+
+df_final = df.groupby("FechaPartida").agg({
+    "Ocup": "sum",  
+    "IPC General": "mean",
+    "Costo_KM": "mean",
+    "Dias Laborales": "max",
+    "Feriados": "max",
+    "Año": "max",  
+    "Mes": "max"
+}).reset_index()
+
+
+scaler = MinMaxScaler()
+exog_vars_opt = ["IPC General", "Costo_KM", "Feriados"]
+df_final_scaled = df_final.copy()
+df_final_scaled[["Ocup"] + exog_vars_opt] = scaler.fit_transform(df_final[["Ocup"] + exog_vars_opt])
+
+
+def create_sequences(data, exog_vars, n_steps):
+    X, y = [], []
+    for i in range(len(data) - n_steps):
+        X.append(data[exog_vars].iloc[i:i + n_steps].values)  
+        y.append(data["Ocup"].iloc[i + n_steps])  
+    return np.array(X), np.array(y)
+
+
+n_steps = 90  # Aumentamos la ventana de tiempo
+train_size = int(len(df_final_scaled) * 0.8)
+train_data, test_data = df_final_scaled.iloc[:train_size], df_final_scaled.iloc[train_size:]
+
+X_train, y_train = create_sequences(train_data, exog_vars_opt, n_steps)
+X_test, y_test = create_sequences(test_data, exog_vars_opt, n_steps)
+
+
+model_gru = Sequential([
+    Bidirectional(GRU(160, return_sequences=True, activation="tanh"), input_shape=(n_steps, len(exog_vars_opt))),
+    BatchNormalization(),
+    Dropout(0.1),
+
+    Bidirectional(GRU(128, return_sequences=True, activation="tanh")),
+    BatchNormalization(),
+    Dropout(0.1),
+
+    Bidirectional(GRU(64, return_sequences=False, activation="tanh")),  # Última capa sin `return_sequences`
+    BatchNormalization(),
+    Dropout(0.1),
+
+    Dense(64, activation="relu"),
+    Dense(32, activation="relu"),  
+    Dense(1, activation="tanh")  # `tanh` en la salida para mayor variabilidad
+])
+
+
+optimizer = tf.keras.optimizers.Adam(learning_rate=0.0002)
+model_gru.compile(optimizer=optimizer, loss="mse")
+
+callbacks = [
+    ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=15, verbose=1),
+    EarlyStopping(monitor='val_loss', patience=50, restore_best_weights=True, verbose=1)
+]
+
+
+history = model_gru.fit(X_train, y_train, epochs=500, batch_size=64, validation_data=(X_test, y_test), verbose=1, callbacks=callbacks)
+
+
+predictions = model_gru.predict(X_test)
+
+# Inversa de la normalización para interpretar resultados correctamente
+y_test_rescaled = scaler.inverse_transform(np.column_stack([y_test] + [np.zeros(y_test.shape)] * (len(exog_vars_opt))))
+predictions_rescaled = scaler.inverse_transform(np.column_stack([predictions.flatten()] + [np.zeros(len(predictions))] * (len(exog_vars_opt))))
+
+# Evaluación del modelo
+rmse = np.sqrt(mean_squared_error(y_test_rescaled[:, 0], predictions_rescaled[:, 0]))
+mae = mean_absolute_error(y_test_rescaled[:, 0], predictions_rescaled[:, 0])
+r2 = r2_score(y_test_rescaled[:, 0], predictions_rescaled[:, 0])
+
+
+print("\n **Evaluación del Modelo GRU Mejorado**")
+print(f" RMSE: {rmse:.4f}")
+print(f" MAE: {mae:.4f}")
+print(f" R² Score: {r2:.4f}")
+
+
+sns.set_style("whitegrid")
+
+# Gráfico de Predicción vs Real
+plt.figure(figsize=(12,6))
+plt.plot(y_test_rescaled[:, 0], label="Real", linestyle='dashed', color="red", alpha=0.8)
+plt.plot(predictions_rescaled[:, 0], label="Predicción", color="blue", alpha=0.8)
+plt.legend()
+plt.title(" Predicción vs Real - Modelo GRU Mejorado")
+plt.xlabel("Tiempo")
+plt.ylabel("Ocupación")
+plt.show()
+
+# Gráfico de Pérdida Durante el Entrenamiento
+plt.figure(figsize=(8,5))
+plt.plot(history.history['loss'], label='Train Loss', color='blue')
+plt.plot(history.history['val_loss'], label='Validation Loss', color='orange')
+plt.legend()
+plt.title(" Pérdida durante el Entrenamiento")
+plt.xlabel("Épocas")
+plt.ylabel("MSE")
+plt.show()
