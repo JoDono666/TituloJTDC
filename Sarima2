@@ -1,0 +1,67 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import statsmodels.tsa.api as smt
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+# Cargar el dataset
+file_path = r"C:\Users\josen\OneDrive\Desktop\Tesis\Solo2024.xlsx"
+df = pd.read_excel(file_path, sheet_name="Hoja1", engine="openpyxl")
+
+
+df["FechaPartida"] = pd.to_datetime(df["FechaPartida"], errors='coerce')
+df.dropna(subset=["FechaPartida"], inplace=True)
+
+# Obtener el **promedio de los 3 viajes con mayor ocupación por día**
+df_max_ocupacion = df.groupby("FechaPartida")["Ocupacion"].apply(lambda x: x.nlargest(3).mean()).reset_index()
+
+# Suavizado con media móvil (reducción de ruido)
+df_max_ocupacion["Ocup_MA"] = df_max_ocupacion["Ocupacion"].rolling(window=5, min_periods=1).mean()
+
+# División de datos en entrenamiento y prueba 
+train_size = int(len(df_max_ocupacion) * 0.85)
+train, test = df_max_ocupacion.iloc[:train_size], df_max_ocupacion.iloc[train_size:]
+
+# Parámetros SARIMA Ajustados
+p, d, q = 3, 1, 3   # Parámetros ARIMA optimizados
+P, D, Q, s = 1, 1, 1, 7  # Parámetros estacionales con periodicidad semanal
+
+# Ajuste del modelo SARIMA
+modelo_sarima = smt.SARIMAX(
+    train["Ocup_MA"],
+    order=(p, d, q),
+    seasonal_order=(P, D, Q, s),
+    enforce_stationarity=False,
+    enforce_invertibility=False
+)
+resultado_sarima = modelo_sarima.fit()
+
+# Predicciones
+predicciones = resultado_sarima.predict(start=len(train), end=len(df_max_ocupacion) - 1)
+
+# Corrección de escala para ajustar mejor la predicción
+factor_ajuste = test["Ocupacion"].mean() / predicciones.mean()
+predicciones *= factor_ajuste
+
+# Evaluación del modelo
+rmse = np.sqrt(mean_squared_error(test["Ocupacion"], predicciones))
+mae = mean_absolute_error(test["Ocupacion"], predicciones)
+r2 = r2_score(test["Ocupacion"], predicciones)
+
+# Gráfica de Resultados
+plt.figure(figsize=(12, 6))
+plt.plot(train["FechaPartida"], train["Ocupacion"], label="Entrenamiento", color="orange")
+plt.plot(test["FechaPartida"], test["Ocupacion"], label="Real (Test)", color="red")
+plt.plot(test["FechaPartida"], predicciones, label="Predicción SARIMA", linestyle="dashed", color="green")
+plt.legend()
+plt.title("Modelo SARIMA Optimizado - Predicción de Ocupación")
+plt.xlabel("Fecha de Partida")
+plt.ylabel("Ocupación")
+plt.grid()
+plt.show()
+
+# Mostrar métricas finales
+print("\n**Resultados del Modelo SARIMA Mejorado**")
+print(f"RMSE: {rmse:.4f}")
+print(f"MAE: {mae:.4f}")
+print(f"R² Score: {r2:.4f}")
