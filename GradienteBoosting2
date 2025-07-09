@@ -1,0 +1,70 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+# Cargar el dataset
+file_path = r"C:\Users\josen\OneDrive\Desktop\Tesis\Solo2024.xlsx"
+df = pd.read_excel(file_path, sheet_name="Hoja1", engine="openpyxl")
+
+#  Asegurar que la fecha esté en formato datetime con "FechaPartida"
+df["FechaPartida"] = pd.to_datetime(df["FechaPartida"], errors='coerce')
+df.dropna(subset=["FechaPartida"], inplace=True)
+
+#  Obtener la mayor ocupación por ID de viaje por día
+df_max_ocupacion = df.groupby("FechaPartida").agg({
+    "Ocupacion": "max",  # Mayor ocupación por ID de viaje
+    "Kms": "mean",
+    "IPC General": "mean",
+    "Feriados": "max"
+}).reset_index()
+
+#  Verificar cantidad de registros antes del preprocesamiento
+print(f" Registros iniciales después de agrupación: {len(df_max_ocupacion)}")
+
+#  Seleccionar variables de entrada y salida
+X = df_max_ocupacion[["Kms", "IPC General", "Feriados"]]
+y = df_max_ocupacion["Ocupacion"]
+
+#  Normalizar variables
+scaler = MinMaxScaler(feature_range=(0, 1))
+X_scaled = scaler.fit_transform(X)
+
+#  Asegurar que hay suficientes datos para entrenamiento y prueba
+if len(X_scaled) > 10:
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, shuffle=False)
+    print(f" División completada: {len(X_train)} train, {len(X_test)} test")
+else:
+    raise ValueError("No hay suficientes datos para entrenamiento y prueba.")
+
+# Entrenar Modelo Gradient Boosting
+modelo_gb = GradientBoostingRegressor(n_estimators=200, learning_rate=0.05, max_depth=6, random_state=42)
+modelo_gb.fit(X_train, y_train)
+
+#  Hacer predicciones
+y_pred_gb = modelo_gb.predict(X_test)
+
+#  Calcular métricas de error
+rmse_gb = np.sqrt(mean_squared_error(y_test, y_pred_gb))
+mae_gb = mean_absolute_error(y_test, y_pred_gb)
+r2_gb = r2_score(y_test, y_pred_gb)
+
+#  Mostrar métricas finales
+print("\n **Resultados del Modelo Gradient Boosting**")
+print(f" RMSE: {rmse_gb:.4f}")
+print(f" MAE: {mae_gb:.4f}")
+print(f" R² Score: {r2_gb:.4f}")
+
+# Graficar comparación entre valores reales y predicciones
+plt.figure(figsize=(12, 6))
+plt.plot(df_max_ocupacion["FechaPartida"][-len(y_test):], y_test, label="Real (Ocupación)", color="red")
+plt.plot(df_max_ocupacion["FechaPartida"][-len(y_test):], y_pred_gb, label="Predicción Gradient Boosting", linestyle="dashed", color="purple")
+plt.legend()
+plt.title("Comparación de Modelo Gradient Boosting vs Real")
+plt.xlabel("Fecha de Partida")
+plt.ylabel("Ocupación")
+plt.grid()
+plt.show()
