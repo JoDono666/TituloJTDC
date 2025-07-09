@@ -1,0 +1,83 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+# Cargar el dataset
+file_path = r"C:\Users\josen\OneDrive\Desktop\Tesis\data2022-2024ej.xlsx"
+df = pd.read_excel(file_path, sheet_name="Hoja1")
+
+
+df["FechaPartida"] = pd.to_datetime(df["FechaPartida"])
+
+
+df_pasajeros = df.groupby("FechaPartida")["Ocup"].sum().reset_index()
+
+# Suavizado con media móvil 
+df_pasajeros["Ocup_MA"] = df_pasajeros["Ocup"].rolling(window=7, min_periods=1).mean()
+
+# Definir modelo SARIMA con mejores parámetros
+modelo_optimo = sm.tsa.statespace.SARIMAX(
+    df_pasajeros["Ocup_MA"],
+    order=(3, 0, 2),
+    seasonal_order=(2, 0, 2, 7),
+    enforce_stationarity=False,
+    enforce_invertibility=False
+)
+
+#  Entrenar el modelo con optimización extendida
+resultado_optimo = modelo_optimo.fit(method="powell", maxiter=5000)
+
+# Hacer predicciones sobre el conjunto de prueba
+test_size = int(len(df_pasajeros) * 0.8)
+df_pasajeros.loc[test_size:, "Predicciones"] = resultado_optimo.predict(start=test_size, end=len(df_pasajeros)-1)
+
+#  Calcular métricas de error del modelo
+rmse = np.sqrt(mean_squared_error(df_pasajeros["Ocup"][test_size:], df_pasajeros["Predicciones"][test_size:]))
+mae = mean_absolute_error(df_pasajeros["Ocup"][test_size:], df_pasajeros["Predicciones"][test_size:])
+r2 = r2_score(df_pasajeros["Ocup"][test_size:], df_pasajeros["Predicciones"][test_size:])
+
+# Graficar la comparación entre valores de entrenamiento, valores reales y predicciones
+plt.figure(figsize=(12, 6))
+plt.plot(df_pasajeros["FechaPartida"][:test_size], df_pasajeros["Ocup"][:test_size], label="Entrenamiento", color="orange")
+plt.plot(df_pasajeros["FechaPartida"][test_size:], df_pasajeros["Ocup"][test_size:], label="Real (Pasajeros)", color="red")
+plt.plot(df_pasajeros["FechaPartida"][test_size:], df_pasajeros["Predicciones"][test_size:], label="Predicción SARIMA", linestyle="dashed", color="green")
+plt.legend()
+plt.title("Modelo SARIMA - Predicción vs. Datos Reales")
+plt.xlabel("Fecha")
+plt.ylabel("Ocup")
+plt.grid()
+plt.show()
+
+# Graficar diferencia entre valores reales y predichos
+plt.figure(figsize=(12, 6))
+
+# Filtramos solo el conjunto de prueba
+df_test = df_pasajeros.iloc[test_size:].copy()
+
+# Aseguramos que la columna 'Predicciones' no tenga valores NaN
+df_test = df_test.dropna(subset=["Predicciones"])
+
+# Calculamos la diferencia entre valores reales y predichos
+df_test["Diferencia"] = df_test["Ocup"] - df_test["Predicciones"]
+
+# Colores: rojo si la predicción es menor al real, azul si es mayor
+colors = ['red' if diff > 0 else 'blue' for diff in df_test["Diferencia"]]
+
+# Crear el gráfico de barras
+plt.bar(df_test["FechaPartida"], df_test["Diferencia"], color=colors, alpha=0.7)
+plt.axhline(y=0, color='black', linestyle='dashed')
+plt.title("Diferencia entre Valores Reales y Predicciones")
+plt.xlabel("Fecha")
+plt.ylabel("Diferencia (Real - Predicción)")
+plt.xticks(rotation=45)
+plt.grid()
+plt.show()
+
+
+# Mostrar métricas finales
+print(f"\n Resultados del Modelo SARIMA Mejorado")
+print(f"RMSE: {rmse:.4f}")
+print(f"MAE: {mae:.4f}")
+print(f"R² Score: {r2:.4f}")
