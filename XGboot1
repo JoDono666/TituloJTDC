@@ -1,0 +1,82 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from xgboost import XGBRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+
+file_path = "C:/Users/josen/OneDrive/Desktop/Tesis/data2022-2024ej.xlsx"
+df = pd.read_excel(file_path, sheet_name='Hoja1')
+
+
+df["FechaPartida"] = pd.to_datetime(df["FechaPartida"])
+df["DiasDesdeInicio"] = (df["FechaPartida"] - df["FechaPartida"].min()).dt.days
+
+
+variables_exogenas = ["IPC General", "Costo_KM", "Feriados", "DiasDesdeInicio"]
+df_final = df.groupby("FechaPartida").agg({
+    "Ocup": "sum",
+    "IPC General": "mean",
+    "Costo_KM": "mean",
+    "Feriados": "max",
+    "DiasDesdeInicio": "max"
+}).reset_index()
+
+# Normalización de Datos
+scaler = MinMaxScaler()
+df_final_scaled = df_final.copy()
+df_final_scaled[["Ocup"] + variables_exogenas] = scaler.fit_transform(df_final[["Ocup"] + variables_exogenas])
+
+
+X = df_final_scaled[variables_exogenas]
+y = df_final_scaled["Ocup"]
+fechas = df_final["FechaPartida"]
+
+X_train, X_test, y_train, y_test, fechas_train, fechas_test = train_test_split(
+    X, y, fechas, test_size=0.2, shuffle=False, random_state=42
+)
+
+
+modelo_xgb = XGBRegressor(
+    n_estimators=500,
+    learning_rate=0.03,
+    max_depth=6,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=42,
+    n_jobs=-1
+)
+
+modelo_xgb.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=True)
+
+
+y_pred_xgb = modelo_xgb.predict(X_test)
+
+
+rmse_xgb = np.sqrt(mean_squared_error(y_test, y_pred_xgb))
+mae_xgb = mean_absolute_error(y_test, y_pred_xgb)
+r2_xgb = r2_score(y_test, y_pred_xgb)
+
+print("\n **Resultados del Modelo XGBoost**")
+print(f" RMSE: {rmse_xgb:.4f}")
+print(f" MAE: {mae_xgb:.4f}")
+print(f" R² Score: {r2_xgb:.4f}")
+
+
+sns.set_style("whitegrid")
+
+#  Gráfico para XGBoost
+plt.figure(figsize=(12, 6))
+plt.plot(fechas_test, y_test.values, label="Real (Ocupación)", color="red")
+plt.plot(fechas_test, y_pred_xgb, label="Predicción XGBoost", linestyle="dashed", color="green")
+plt.legend()
+plt.title(" Modelo XGBoost vs Datos Reales")
+plt.xlabel("Fecha de Partida")
+plt.ylabel("Ocupación")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.grid()
+plt.show()
